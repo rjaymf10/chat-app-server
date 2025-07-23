@@ -5,7 +5,7 @@
   "private": true,
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon --watch 'src/**' --ext 'ts,json' --exec 'npm run build && npm run start'",
+    "dev": "nodemon --watch 'src/**' --ext 'ts,json' --exec \"npm run build && npm run start\"",
     "build": "tsc",
     "start": "node dist/index.js"
   },
@@ -13,12 +13,13 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@google/genai": "^1.10.0",
+    "dotenv": "^17.2.0",
     "express": "^4.21.2",
     "multer": "^2.0.2",
     "uuid": "^11.1.0"
   },
   "devDependencies": {
-    "@types/node": "^20.12.12",
+    "@types/node": "^20.19.9",
     "nodemon": "^3.1.0",
     "typescript": "^5.4.5"
   }

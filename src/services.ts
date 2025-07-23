@@ -176,3 +176,25 @@ export async function handleChat(query: string, history: any[]): Promise<string>
     console.log("Generated response successfully.");
     return chatModel.text;
 }
+
+/**
+ * Handles a chat query by searching the vector DB for context and generating a response.
+ * @param query The user's question.
+ * @param history The previous chat history.
+ * @returns The generated response from the Gemini model.
+ */
+export async function handleGenerate(query: string, history: any[]): Promise<string> {
+
+    const chatModel = await genAI.models.generateContent({
+        model: "gemini-1.5-flash",
+        contents: query,
+        config: {
+            ...generationConfig,
+            safetySettings: safetySettings
+        },
+    });
+
+    return chatModel.text;
+
+    console.log(`Handling chat query: "${query}"`);
+}
