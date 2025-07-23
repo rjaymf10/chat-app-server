@@ -2,6 +2,7 @@ import { GoogleGenAI, HarmCategory, HarmBlockThreshold, ContentEmbedding } from 
 import { v4 as uuidv4 } from 'uuid';
 import * as dotenv from 'dotenv';
 import pdfParse from 'pdf-parse';
+import { Pinecone } from '@pinecone-database/pinecone';
 
 // Configure dotenv before any other imports that need env variables
 dotenv.config();
@@ -10,6 +11,8 @@ dotenv.config();
 // IMPORTANT: Create a .env file in your root directory and add your API key.
 // GOOGLE_API_KEY=your_api_key_here
 const API_KEY = process.env.GOOGLE_API_KEY as string;
+const PINECONE_API_KEY = process.env.PINECONE_API_KEY as string;
+const PINECONE_INDEX_NAME = process.env.PINECONE_INDEX_NAME as string; // You'll need to add this to your .env
 
 // --- MODEL & AI SETUP ---
 const genAI = new GoogleGenAI({ apiKey: API_KEY });
@@ -30,18 +33,16 @@ const safetySettings = [
 
 // --- VECTOR DATABASE ---
 
-/**
- * A simple in-memory store for our vector embeddings.
- * In a production environment, you would replace this with a dedicated vector database
- * like Pinecone, ChromaDB, Weaviate, or a managed cloud service.
- */
-interface Vector {
-    id: string;
-    embedding: any;
-    text: string;
-    documentId: string;
+let pinecone: Pinecone;
+
+async function initPinecone() {
+    if (!pinecone) {
+        pinecone = new Pinecone({
+            apiKey: PINECONE_API_KEY,
+        });
+    }
+    return pinecone;
 }
-const vectorStore: Vector[] = [];
 
 // --- UTILITY FUNCTIONS ---
 
@@ -57,22 +58,6 @@ function chunkText(text: string, chunkSize = 1000): string[] {
         chunks.push(text.substring(i, i + chunkSize));
     }
     return chunks;
-}
-
-/**
- * Calculates the cosine similarity between two vectors.
- * @param vecA The first vector.
- * @param vecB The second vector.
- * @returns The cosine similarity score.
- */
-function cosineSimilarity(vecA: number[], vecB: number[]): number {
-    const dotProduct = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0);
-    const magnitudeA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0));
-    const magnitudeB = Math.sqrt(vecB.reduce((sum, b) => sum + b * b, 0));
-    if (magnitudeA === 0 || magnitudeB === 0) {
-        return 0;
-    }
-    return dotProduct / (magnitudeA * magnitudeB);
 }
 
 
@@ -94,31 +79,40 @@ export async function handleFileUpload(fileBuffer: Buffer, originalname: string)
     const chunks = chunkText(text.text);
     console.log(`File split into ${chunks.length} chunks.`);
 
-    // 2. Generate and store embeddings for each chunk
+    // 2. Generate and store embeddings for each chunk in Pinecone
+    const pineconeClient = await initPinecone();
+    const index = pineconeClient.Index(PINECONE_INDEX_NAME);
+
+    const vectorsToUpsert = [];
+
     for (const chunk of chunks) {
         const result = await genAI.models.embedContent(
             {
                 model: "gemini-embedding-001",
                 contents: { parts: [{ text: chunk }] },
                 config: {
-                    taskType: "RETRIEVAL_DOCUMENT"
-                }
+                    taskType: "RETRIEVAL_DOCUMENT",
+                    outputDimensionality: 1024,
+                },
             }
         );
         const embedding = result.embeddings[0].values;
 
-        const vector: Vector = {
+        vectorsToUpsert.push({
             id: uuidv4(),
-            embedding: embedding,
-            text: chunk,
-            documentId: documentId,
-        };
-        vectorStore.push(vector);
-        console.log(chunk)
+            values: embedding,
+            metadata: { text: chunk, documentId: documentId, originalname: originalname },
+        });
     }
 
-    
-    console.log(`Successfully created and stored ${chunks.length} vectors for document ${originalname}.`);
+    // Upsert vectors in batches (Pinecone recommends batches of 100)
+    const batchSize = 100;
+    for (let i = 0; i < vectorsToUpsert.length; i += batchSize) {
+        const batch = vectorsToUpsert.slice(i, i + batchSize);
+        await index.upsert(batch);
+    }
+
+    console.log(`Successfully created and stored ${vectorsToUpsert.length} vectors in Pinecone for document ${originalname}.`);
     return documentId;
 }
 
@@ -140,23 +134,31 @@ export async function handleChat(query: string, history: any[]): Promise<any> {
             model: "gemini-embedding-001",
             contents: { parts: [{ text: query }] },
             config: {
-                taskType: "RETRIEVAL_QUERY"
+                taskType: "RETRIEVAL_QUERY",
+                outputDimensionality: 1024,
             }
         }
     );
     const queryEmbedding = queryEmbeddingResult.embeddings[0].values;
 
-    // 2. Find relevant documents from the vector store
-    const similarDocs = vectorStore
-        .map(vector => ({
-            ...vector,
-            similarity: cosineSimilarity(queryEmbedding, vector.embedding)
-        }))
-        .sort((a, b) => b.similarity - a.similarity)
-        .slice(0, 5); // Get top 5 most similar chunks
+    // 2. Query Pinecone for similar documents
+    const pineconeClient = await initPinecone();
+    const index = pineconeClient.Index(PINECONE_INDEX_NAME);
 
-    const context = similarDocs.map(doc => doc.text).join('\n\n---\n\n');
-    console.log(`Found ${similarDocs.length} relevant document chunks.`);
+    const queryResponse = await index.query({
+        vector: queryEmbedding,
+        topK: 5, // Get top 5 most similar chunks
+        includeMetadata: true,
+    });
+
+    const similarDocs = queryResponse.matches?.map(match => match.metadata?.text).filter(Boolean) || [];
+
+    const context = similarDocs.join(`
+
+---
+
+`);
+    console.log(`Found ${similarDocs.length} relevant document chunks from Pinecone.`);
 
     const prompt = `
         Based on the following context, please answer the user's question.
