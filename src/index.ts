@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import cors from 'cors';
 import multer from 'multer';
 import { handleFileUpload, handleChat, handleGenerate } from './services';
 import * as dotenv from 'dotenv';
@@ -12,6 +13,7 @@ const port = process.env.PORT || 3000;
 
 // --- MIDDLEWARE ---
 app.use(express.json());
+app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 
 // --- FILE UPLOAD SETUP ---
