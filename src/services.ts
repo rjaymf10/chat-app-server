@@ -1,4 +1,4 @@
-import { GoogleGenAI, HarmCategory, HarmBlockThreshold, TaskType } from "@google/genai";
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { v4 as uuidv4 } from 'uuid';
 
 // --- ENVIRONMENT VARIABLES ---
@@ -88,23 +88,22 @@ export async function handleFileUpload(fileBuffer: Buffer, originalname: string)
     const chunks = chunkText(text);
     console.log(`File split into ${chunks.length} chunks.`);
 
-    // 2. Get the embedding model
-    const embeddingModel = genAI.getGenerativeModel({  });
-
-    // 3. Generate and store embeddings for each chunk
+    // 2. Generate and store embeddings for each chunk
     for (const chunk of chunks) {
         const result = await genAI.models.embedContent(
             {
-                model: "gemini-embedding-001"
-                content: [chunk],
-                taskType: "RETRIEVAL_DOCUMENT"
+                model: "gemini-embedding-001",
+                contents: { parts: [{ text: chunk }] },
+                config: {
+                    taskType: "RETRIEVAL_DOCUMENT"
+                }
             }
         );
         const embedding = result.embeddings.values;
 
         const vector: Vector = {
             id: uuidv4(),
-            embedding: embedding,
+            embedding: embedding[0],
             text: chunk,
             documentId: documentId,
         };
@@ -128,33 +127,28 @@ export async function handleChat(query: string, history: any[]): Promise<string>
     console.log(`Handling chat query: "${query}"`);
 
     // 1. Embed the user's query
-    const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
-    const queryEmbeddingResult = await embeddingModel.embedContent(
+    const queryEmbeddingResult = await genAI.models.embedContent(
         {
-            content: { parts: [{ text: query }] },
-            taskType: TaskType.RETRIEVAL_QUERY
+            model: "gemini-embedding-001",
+            contents: { parts: [{ text: query }] },
+            config: {
+                taskType: "RETRIEVAL_QUERY"
+            }
         }
     );
-    const queryEmbedding = queryEmbeddingResult.embedding.values;
+    const queryEmbedding = queryEmbeddingResult.embeddings.values;
 
     // 2. Find relevant documents from the vector store
     const similarDocs = vectorStore
         .map(vector => ({
             ...vector,
-            similarity: cosineSimilarity(queryEmbedding, vector.embedding)
+            similarity: cosineSimilarity(queryEmbedding[0], vector.embedding)
         }))
         .sort((a, b) => b.similarity - a.similarity)
         .slice(0, 5); // Get top 5 most similar chunks
 
     const context = similarDocs.map(doc => doc.text).join('\n\n---\n\n');
     console.log(`Found ${similarDocs.length} relevant document chunks.`);
-
-    // 3. Prepare the prompt for the chat model
-    const chatModel = genAI.getGenerativeModel({
-        model: "gemini-1.5-flash",
-        generationConfig,
-        safetySettings,
-    });
 
     const prompt = `
         Based on the following context, please answer the user's question.
@@ -167,11 +161,18 @@ export async function handleChat(query: string, history: any[]): Promise<string>
         ${query}
     `;
 
+    // 3. Prepare the prompt for the chat model
+    const chatModel = await genAI.models.generateContent({
+        model: "gemini-1.5-flash",
+        contents: prompt,
+        config: {
+            ...generationConfig,
+            safetySettings: safetySettings
+        },
+    });
+
     // 4. Generate the response
-    const chat = chatModel.startChat({ history });
-    const result = await chat.sendMessage(prompt);
-    const response = result.response;
 
     console.log("Generated response successfully.");
-    return response.text();
+    return chatModel.text;
 }
