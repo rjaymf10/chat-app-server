@@ -1,5 +1,9 @@
-import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold, ContentEmbedding } from "@google/genai";
 import { v4 as uuidv4 } from 'uuid';
+import * as dotenv from 'dotenv';
+
+// Configure dotenv before any other imports that need env variables
+dotenv.config();
 
 // --- ENVIRONMENT VARIABLES ---
 // IMPORTANT: Create a .env file in your root directory and add your API key.
@@ -32,7 +36,7 @@ const safetySettings = [
  */
 interface Vector {
     id: string;
-    embedding: number[];
+    embedding: any;
     text: string;
     documentId: string;
 }
@@ -99,11 +103,11 @@ export async function handleFileUpload(fileBuffer: Buffer, originalname: string)
                 }
             }
         );
-        const embedding = result.embeddings.values;
+        const embedding = result.embeddings[0].values;
 
         const vector: Vector = {
             id: uuidv4(),
-            embedding: embedding[0],
+            embedding: embedding,
             text: chunk,
             documentId: documentId,
         };
@@ -123,7 +127,7 @@ export async function handleFileUpload(fileBuffer: Buffer, originalname: string)
  * @param history The previous chat history.
  * @returns The generated response from the Gemini model.
  */
-export async function handleChat(query: string, history: any[]): Promise<string> {
+export async function handleChat(query: string, history: any[]): Promise<any> {
     console.log(`Handling chat query: "${query}"`);
 
     // 1. Embed the user's query
@@ -136,13 +140,13 @@ export async function handleChat(query: string, history: any[]): Promise<string>
             }
         }
     );
-    const queryEmbedding = queryEmbeddingResult.embeddings.values;
+    const queryEmbedding = queryEmbeddingResult.embeddings[0].values;
 
     // 2. Find relevant documents from the vector store
     const similarDocs = vectorStore
         .map(vector => ({
             ...vector,
-            similarity: cosineSimilarity(queryEmbedding[0], vector.embedding)
+            similarity: cosineSimilarity(queryEmbedding, vector.embedding)
         }))
         .sort((a, b) => b.similarity - a.similarity)
         .slice(0, 5); // Get top 5 most similar chunks
@@ -163,7 +167,7 @@ export async function handleChat(query: string, history: any[]): Promise<string>
 
     // 3. Prepare the prompt for the chat model
     const chatModel = await genAI.models.generateContent({
-        model: "gemini-1.5-flash",
+        model: "gemini-2.5-flash",
         contents: prompt,
         config: {
             ...generationConfig,
@@ -186,7 +190,7 @@ export async function handleChat(query: string, history: any[]): Promise<string>
 export async function handleGenerate(query: string, history: any[]): Promise<string> {
 
     const chatModel = await genAI.models.generateContent({
-        model: "gemini-1.5-flash",
+        model: "gemini-2.5-flash",
         contents: query,
         config: {
             ...generationConfig,
@@ -195,6 +199,4 @@ export async function handleGenerate(query: string, history: any[]): Promise<str
     });
 
     return chatModel.text;
-
-    console.log(`Handling chat query: "${query}"`);
 }
