@@ -1,6 +1,7 @@
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold, ContentEmbedding } from "@google/genai";
 import { v4 as uuidv4 } from 'uuid';
 import * as dotenv from 'dotenv';
+import pdfParse from 'pdf-parse';
 
 // Configure dotenv before any other imports that need env variables
 dotenv.config();
@@ -88,8 +89,9 @@ export async function handleFileUpload(fileBuffer: Buffer, originalname: string)
     const documentId = uuidv4();
 
     // 1. Read and chunk the text
-    const text = fileBuffer.toString('utf-8');
-    const chunks = chunkText(text);
+    const text = await pdfParse(fileBuffer);
+    console.log(text)
+    const chunks = chunkText(text.text);
     console.log(`File split into ${chunks.length} chunks.`);
 
     // 2. Generate and store embeddings for each chunk
@@ -112,9 +114,11 @@ export async function handleFileUpload(fileBuffer: Buffer, originalname: string)
             documentId: documentId,
         };
         vectorStore.push(vector);
+        console.log(chunk)
     }
 
-    console.log(`Successfully created and stored ${chunks.length} vectors for document ${documentId}.`);
+    
+    console.log(`Successfully created and stored ${chunks.length} vectors for document ${originalname}.`);
     return documentId;
 }
 
