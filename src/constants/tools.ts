@@ -51,7 +51,7 @@ export const zoomFunctionDeclaration = {
 };
 
 export const ragFunctionDeclaration = {
-  name: "rag_intro_llm_prompt_engineering",
-  description: "If the user's queries are all about llm prompt engineering.",
+  name: "rag_intro_llm_prompt_engineering", // change the function name according to what data source you uploaded.
+  description: "If the user's queries are all about llm prompt engineering.", // change the function description according to what data source you uploaded.
   parameters: {}
 };
