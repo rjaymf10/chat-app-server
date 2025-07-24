@@ -1,8 +1,11 @@
-import { GoogleGenAI, HarmCategory, HarmBlockThreshold, Type } from "@google/genai";
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold, Type, Part } from "@google/genai";
 import { v4 as uuidv4 } from 'uuid';
 import * as dotenv from 'dotenv';
 import pdfParse from 'pdf-parse';
 import { Pinecone } from '@pinecone-database/pinecone';
+import { getToken } from "./utils/token";
+import { ZOOM_API_BASE_URL } from "./constants";
+import { ragFunctionDeclaration, weatherFunctionDeclaration, zoomFunctionDeclaration } from "./constants/tools";
 
 // Configure dotenv before any other imports that need env variables
 dotenv.config();
@@ -31,6 +34,8 @@ const safetySettings = [
     { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
     { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
 ];
+
+const systemInstruction = `Remember today is ${new Date()}.`;
 
 // --- VECTOR DATABASE ---
 
@@ -188,22 +193,6 @@ export async function handleChat(query: string, history: any[]): Promise<any> {
     return chatModel.text;
 }
 
-// Define the function declaration for the model
-const weatherFunctionDeclaration = {
-  name: 'get_current_temperature',
-  description: 'Gets the current temperature for a given location.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      location: {
-        type: Type.STRING,
-        description: 'The city name, e.g. San Francisco',
-      },
-    },
-    required: ['location'],
-  },
-};
-
 /**
  * Handles a chat query by searching the vector DB for context and generating a response.
  * @param query The user's question.
@@ -223,26 +212,82 @@ export async function handleGenerate(query: string, history: any[]): Promise<str
             }
         ],
         config: {
+            systemInstruction,
             ...generationConfig,
-            safetySettings: safetySettings,
+            safetySettings,
             tools: [{
-                functionDeclarations: [weatherFunctionDeclaration]
+                functionDeclarations: [weatherFunctionDeclaration, zoomFunctionDeclaration, ragFunctionDeclaration]
             }]
         },
     });
 
     // Check for function calls in the response
     if (chatModel.functionCalls && chatModel.functionCalls.length > 0) {
-        const functionCall = chatModel.functionCalls[0]; // Assuming one function call
-        console.log(`Function to call: ${functionCall.name}`);
-        console.log(`Arguments: ${JSON.stringify(functionCall.args)}`);
-        const funcArgs: any = functionCall.args;
+        let results: Part[] = [];
 
-        const location = await fetch(`http://api.weatherstack.com/current?access_key=${WEATHER_API}&query=${encodeURI(funcArgs.location)}`, {
-            headers: {
-                'Content-Type': 'application/json',
-            },
-        }).then(response => response.json());
+        for (const functionCall of chatModel.functionCalls) {
+            console.log(`Function to call: ${functionCall.name}`);
+            console.log(`Arguments: ${JSON.stringify(functionCall.args)}`);
+            const funcArgs: any = functionCall.args;
+
+            if (functionCall.name === 'get_current_temperature') {
+                const res = await fetch(`http://api.weatherstack.com/current?access_key=${WEATHER_API}&query=${encodeURI(funcArgs.location)}`, {
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                }).then(response => response.json());
+
+                results.push({
+                    functionResponse: {
+                        name: functionCall.name,
+                        response: {
+                            result: res // The 'response' needs to be a dict/object
+                        }
+                    }
+                })
+            } else if (functionCall.name === 'create_zoom_meeting') {
+                const token = await getToken();
+
+                const res = await fetch(
+                  `${ZOOM_API_BASE_URL}/users/me/meetings`,
+                  {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      Authorization: `Bearer ${token.access_token}`,
+                    },
+                    body: JSON.stringify({
+                      topic: funcArgs.topic,
+                      settings: {
+                        meeting_invitees: funcArgs.meeting_invitees,
+                      },
+                      start_time: funcArgs.start_time,
+                      timezone: "Asia/Manila"
+                    }),
+                  }
+                ).then(response => response.json());
+
+                results.push({
+                    functionResponse: {
+                        name: functionCall.name,
+                        response: {
+                            result: res // The 'response' needs to be a dict/object
+                        }
+                    }
+                })
+            } else if (functionCall.name === 'rag_intro_llm_prompt_engineering') {
+                const res = await handleChat(query, history);
+
+                results.push({
+                    functionResponse: {
+                        name: functionCall.name,
+                        response: {
+                            result: res // The 'response' needs to be a dict/object
+                        }
+                    }
+                })
+            }
+        }
 
         const functionRes = await genAI.models.generateContent({
             model: "gemini-2.5-flash",
@@ -255,32 +300,20 @@ export async function handleGenerate(query: string, history: any[]): Promise<str
                     role: "user"
                 },
                 {
-                    parts: [{
-                        functionResponse: {
-                            name: functionCall.name,
-                            response: {
-                                result: location // The 'response' needs to be a dict/object
-                            }
-                        }
-                    }]
+                    parts: results
                 }
             ],
             config: {
                 ...generationConfig,
                 safetySettings: safetySettings,
-                tools: [{
-                    functionDeclarations: [weatherFunctionDeclaration]
-                }]
-            },
+            }
         });
 
-        console.log(functionRes.text);
         return functionRes.text;
     // In a real app, you would call your actual function here:
     // const result = await getCurrentTemperature(functionCall.args);
     } else {
         console.log("No function call found in the response.");
-        console.log(chatModel.text);
 
         return chatModel.text;
     }
