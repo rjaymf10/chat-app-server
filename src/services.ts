@@ -1,4 +1,4 @@
-import { GoogleGenAI, HarmCategory, HarmBlockThreshold, ContentEmbedding } from "@google/genai";
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold, Type } from "@google/genai";
 import { v4 as uuidv4 } from 'uuid';
 import * as dotenv from 'dotenv';
 import pdfParse from 'pdf-parse';
@@ -13,6 +13,7 @@ dotenv.config();
 const API_KEY = process.env.GOOGLE_API_KEY as string;
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY as string;
 const PINECONE_INDEX_NAME = process.env.PINECONE_INDEX_NAME as string; // You'll need to add this to your .env
+const WEATHER_API = process.env.WEATHER_API_KEY as string;
 
 // --- MODEL & AI SETUP ---
 const genAI = new GoogleGenAI({ apiKey: API_KEY });
@@ -187,6 +188,22 @@ export async function handleChat(query: string, history: any[]): Promise<any> {
     return chatModel.text;
 }
 
+// Define the function declaration for the model
+const weatherFunctionDeclaration = {
+  name: 'get_current_temperature',
+  description: 'Gets the current temperature for a given location.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      location: {
+        type: Type.STRING,
+        description: 'The city name, e.g. San Francisco',
+      },
+    },
+    required: ['location'],
+  },
+};
+
 /**
  * Handles a chat query by searching the vector DB for context and generating a response.
  * @param query The user's question.
@@ -194,15 +211,77 @@ export async function handleChat(query: string, history: any[]): Promise<any> {
  * @returns The generated response from the Gemini model.
  */
 export async function handleGenerate(query: string, history: any[]): Promise<string> {
-
     const chatModel = await genAI.models.generateContent({
         model: "gemini-2.5-flash",
-        contents: query,
+        contents: [
+            ...history,
+            {
+                parts: [{
+                    text: query
+                }],
+                role: "user"
+            }
+        ],
         config: {
             ...generationConfig,
-            safetySettings: safetySettings
+            safetySettings: safetySettings,
+            tools: [{
+                functionDeclarations: [weatherFunctionDeclaration]
+            }]
         },
     });
 
-    return chatModel.text;
+    // Check for function calls in the response
+    if (chatModel.functionCalls && chatModel.functionCalls.length > 0) {
+        const functionCall = chatModel.functionCalls[0]; // Assuming one function call
+        console.log(`Function to call: ${functionCall.name}`);
+        console.log(`Arguments: ${JSON.stringify(functionCall.args)}`);
+        const funcArgs: any = functionCall.args;
+
+        const location = await fetch(`http://api.weatherstack.com/current?access_key=${WEATHER_API}&query=${encodeURI(funcArgs.location)}`, {
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        }).then(response => response.json());
+
+        const functionRes = await genAI.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: [
+                ...history,
+                {
+                    parts: [{
+                        text: query
+                    }],
+                    role: "user"
+                },
+                {
+                    parts: [{
+                        functionResponse: {
+                            name: functionCall.name,
+                            response: {
+                                result: location // The 'response' needs to be a dict/object
+                            }
+                        }
+                    }]
+                }
+            ],
+            config: {
+                ...generationConfig,
+                safetySettings: safetySettings,
+                tools: [{
+                    functionDeclarations: [weatherFunctionDeclaration]
+                }]
+            },
+        });
+
+        console.log(functionRes.text);
+        return functionRes.text;
+    // In a real app, you would call your actual function here:
+    // const result = await getCurrentTemperature(functionCall.args);
+    } else {
+        console.log("No function call found in the response.");
+        console.log(chatModel.text);
+
+        return chatModel.text;
+    }
 }
