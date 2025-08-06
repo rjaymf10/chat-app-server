@@ -285,7 +285,7 @@ export async function handleGenerate(query: string, history: any[]): Promise<str
                         }
                     }
                 })
-            } else if (functionCall.name === 'rag_intro_llm_prompt_engineering') { // change the function name according to what data source you uploaded.
+            } else if (functionCall.name === 'rag_university_of_baguio_student_handbook') { // change the function name according to what data source you uploaded.
                 const res = await handleChat(query, history);
 
                 results.push({
